@@ -30,19 +30,15 @@ const int TRIGGER2 = 2;
 const int TRIGGER3 = 3;
 const int FALL_ACTIVATION = 4;
 
-#define SSID "YOUR WIFI NAME"
-#define PASSWORD "YOUR WIFI PASSWORD"
-
-/*
-  https://notify-bot.line.me/doc/en/
-*/
-#define LINE_TOKEN "YOUR TOKEN"
-#define LINE_API "https://notify-api.line.me/api/notify"
+#define SSID "YOUR WIFI NAME"                                                 // WiFi Name
+#define PASSWORD "YOUR WIFI PASSWORD"                                     // WiFi Password
+#define LINE_TOKEN "YOUR LINE TOKEN" // TOKEN
+#define LINE_API "https://notify-api.line.me/api/notify"         // LINE API
 
 int getAccAmp();
 int getAngleAmp();
-bool displayInfo();
-void lineNotify();
+float *getGpsInfo();
+void lineNotify(float lanitude, float longitde);
 void serialFlush();
 void mpu_read();
 
@@ -147,37 +143,14 @@ void loop()
   else if (state == FALL_ACTIVATION)
   { // in event of a fall detection
     Serial.println("FALL DETECTED");
-    if (displayInfo())
-    {
-      Serial.print(latitude, 6);
-      Serial.print(",");
-      Serial.print(longitude, 6);
-      Serial.print(" | Speed (Km) : ");
-      Serial.print(speed, 2);
-      Serial.println();
-      delay(2000);
-    }
-    else
-    {
-      Serial.println("Can't find Location");
-    }
-    // lineNotify(latitude,longitude); waiting for develop this function to send data to api line
-    // send to database
+    float *coordinate = getGpsInfo();
+    lineNotify(coordinate[0], coordinate[1]);
     state = filter;
   }
 }
 
 void mpu_read()
 {
-  /*
-    Wire.read() << 8: ในบรรทัดนี้, Wire.read() จะอ่านข้อมูลจาก MPU ที่ถูกส่งมาผ่าน I2C และคืนค่า
-    ในรูปแบบของไบต์ (8 บิต). << 8 คือการทำ bitwise shift ซึ่งหมายถึงการเลื่อนค่าไบต์ทั้งหมดไปทางซ้ายขึ้น 8 ที
-    ทำให้ได้ค่าที่เหมาะสมสำหรับบิตที่สูงขึ้นของค่าที่จะสร้างขึ้น.
-    | Wire.read();: ในขั้นตอนนี้, Wire.read() จะอ่านข้อมูลไบต์ที่ต่อมาที่จะถูก OR กับค่าที่ได้จากขั้นตอนก่อนหน้า. 
-    การ OR ทำให้บิตที่ต่ำกว่าของค่าที่ได้จาก Wire.read() << 8 ถูกเติมเต็มไปด้วยข้อมูลใหม่ที่ได้จาก Wire.read().
-    รวมกัน, ข้อมูลจาก ACCEL_XOUT_H และ ACCEL_XOUT_L ถูกอ่านจาก MPU และถูกประมวลผลในบรรทัดนี้เพื่อสร้างค่าเต็มที่
-    แทนค่าความเร่งในแกน X ของ MPU. การ shift และ OR ทำให้ได้ค่าที่ถูกต้องตามรูปแบบที่ใช้ในการเก็บค่าแบบ signed integer (16-bit).
-  */
   Wire.beginTransmission(MPU_addr);
   Wire.write(0x3B); // starting with register 0x3B (ACCEL_XOUT_H)
   Wire.endTransmission(false);
@@ -214,7 +187,7 @@ int getAngleAmp()
   return Mag_Angle;
 }
 
-void lineNotify()
+void lineNotify(float lanitude, float longitde)
 {
   HTTPClient https;
   /*
@@ -226,27 +199,91 @@ void lineNotify()
   https.begin(*client, LINE_API);
   https.addHeader("Authorization", "Bearer " + String(LINE_TOKEN));
   https.addHeader("Content-Type", "application/x-www-form-urlencoded");
-  String httpMsg = "message=Fall Detection!";
-  Serial.println(httpMsg);
-  int httpsResponseCode = https.POST(httpMsg);
-  Serial.println("Line Notify Respond Status: " + String(httpsResponseCode));
+
+  if (latitude == 0.0 && longitde == 0.0) 
+  {
+    String httpMsg = "message=Fall Detection!\nError: Can't detect location.";
+    int httpsResponseCode = https.POST(httpMsg);
+    Serial.println("Line Notify Respond Status: " + String(httpsResponseCode));
+  }
+  else 
+  {
+    String mapLink = "http://maps.google.com/maps?q=";
+    char buffer[10];
+    dtostrf(latitude, 9, 6, buffer);
+    mapLink += buffer;
+    memset(buffer, 0, sizeof(buffer));
+    mapLink += ",";
+    dtostrf(longitude, 9, 6, buffer);
+    mapLink += buffer;
+    memset(buffer, 0, sizeof(buffer));
+
+    String httpMsg = "message=Fall Detection!\nGoogle Map Link: " + mapLink;
+    Serial.println(httpMsg);
+
+    int httpsResponseCode = https.POST(httpMsg);
+    Serial.println("Line Notify Respond Status: " + String(httpsResponseCode));
+  }
 }
 
-bool displayInfo()
+float *getGpsInfo()
 {
   /*
     Extraction NMEA and Explain about NMEA. via https://www.artronshop.co.th/article/44/%E0%B8%81%E0%B8%B2%E0%B8%A3%E0%B9%83%E0%B8%8A%E0%B9%89%E0%B8%87%E0%B8%B2%E0%B8%99%E0%B9%82%E0%B8%A1%E0%B8%94%E0%B8%B9%E0%B8%A5-gps-ublox-neo-6m
   */
+  static float coordinate[2];
+  coordinate[0] = 00.000000;
+  coordinate[1] = 00.000000;
   if (SerialGPS.available())
   {
-    String line;
+    String line = "";
     while (SerialGPS.available() > 0)
     {
       char c = SerialGPS.read();
       if (c == '\r')
       {
         Serial.println(line);
-        return true;
+        if (line.indexOf("$GPRMC" >= 0))
+        {
+          String dataCut[13];
+          int index = 0;
+          for (unsigned int dataStart = 0; dataStart < line.length();)
+          {
+            dataCut[index] = line.substring(dataStart + 1, line.indexOf(",", dataStart + 1));
+            dataStart = line.indexOf(",", dataStart + 1);
+            index++;
+          }
+          if (dataCut[2] == "A")
+          {
+            int dotPos = 0;
+            dotPos = dataCut[3].indexOf("."); // 4916.45 - แยกออกมาได้เป็น 49 องศา 16.45 นาที
+            String latDeg = dataCut[3].substring(0, dotPos - 2);
+            String latMin = dataCut[3].substring(dotPos - 2, dataCut[3].length());
+            dotPos = dataCut[5].indexOf('.');
+            String lngDeg = dataCut[5].substring(0, dotPos - 2);
+            String lngMin = dataCut[5].substring(dotPos - 2, dataCut[5].length());
+            latitude = (latDeg.toFloat() + (latMin.toFloat() / 60.0)) * (dataCut[4] == "N" ? 1 : -1);
+            longitude = (lngDeg.toFloat() + (lngMin.toFloat() / 60.0)) * (dataCut[6] == "E" ? 1 : -1);
+
+            coordinate[0] = latitude;
+            coordinate[1] = longitude;
+            Serial.print("Latitude= ");
+            Serial.println(coordinate[0], 6);
+            Serial.print("Longtitude= ");
+            Serial.println(coordinate[1], 6);
+            return coordinate;
+          }
+          else
+          {
+            Serial.println("Error: No Signal from Satalite");
+          }
+          serialFlush();
+        }
+        Serial.print("Latitude= ");
+        Serial.println(coordinate[0], 6);
+        Serial.print("Longtitude= ");
+        Serial.println(coordinate[1], 6);
+        return coordinate;
       }
       else if (c == '\n')
       {
@@ -259,71 +296,16 @@ bool displayInfo()
       delay(1);
     }
   }
-  return false;
+  Serial.println("No Serial from GPS NEO6m (maybe wire RX, TX connect wrong?)");
+  Serial.print("Latitude= ");
+  Serial.println(coordinate[0], 6);
+  Serial.print("Longtitude= ");
+  Serial.println(coordinate[1], 6);
+  return coordinate;
 }
 
-// bool displayInfo()
-// {
-//   if (SerialGPS.available())
-//   {
-//     String line = "";
-//     while (SerialGPS.available())
-//     {
-//       char c = SerialGPS.read();
-//       if (c == '\r')
-//       {
-//         Serial.println(line);
-//         if (line.indexOf("$GPRMC") >= 0)
-//         {
-//           // Serial.println(line);
-//           String dataCut[13];
-//           int index = 0;
-//           for (int dataStart = 0; dataStart < line.length();)
-//           {
-//             dataCut[index] = line.substring(dataStart + 1, line.indexOf(',', dataStart + 1));
-//             // Serial.println(dataCut[index]);
-//             dataStart = line.indexOf(',', dataStart + 1);
-//             index++;
-//           }
-//           if (dataCut[2] == "A")
-//           {
-//             int dotPos = 0;
-//             dotPos = dataCut[3].indexOf('.');
-//             String latDeg = dataCut[3].substring(0, dotPos - 2);
-//             String latMin = dataCut[3].substring(dotPos - 2, dotPos + 10);
-//             dotPos = dataCut[5].indexOf('.');
-//             String lngDeg = dataCut[5].substring(0, dotPos - 2);
-//             String lngMin = dataCut[5].substring(dotPos - 2, dotPos + 10);
-//             latitude = (latDeg.toFloat() + (latMin.toFloat() / 60.0)) * (dataCut[4] == "N" ? 1 : -1);
-//             longitude = (lngDeg.toFloat() + (lngMin.toFloat() / 60.0)) * (dataCut[6] == "E" ? 1 : -1);
-//             speed = dataCut[7].toFloat() * 1.652;
-
-//             return true;
-//           }
-//           else
-//           {
-//             Serial.println("Error : No fix now.");
-//           }
-//           serialFlush();
-//         }
-//         line = "";
-//       }
-//       else if (c == '\n')
-//       {
-//         // pass
-//       }
-//       else
-//       {
-//         line += c;
-//       }
-//       delay(1);
-//     }
-//   }
-//   return false;
-// }
-
-// void serialFlush()
-// {
-//   while (Serial.available())
-//     Serial.read();
-// }
+void serialFlush()
+{
+  while (Serial.available())
+    Serial.read();
+}

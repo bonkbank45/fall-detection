@@ -2,6 +2,7 @@
 #include <ESP8266WiFi.h>
 #include <WiFiClient.h>
 #include <ESP8266HTTPClient.h>
+#include <WiFiManager.h>
 #include "SoftwareSerial.h"
 #include "TinyGPS++.h"
 
@@ -29,15 +30,22 @@ const int TRIGGER1 = 1;
 const int TRIGGER2 = 2;
 const int TRIGGER3 = 3;
 const int FALL_ACTIVATION = 4;
+const int reconnectWifi = 5;
 
-#define SSID "YOUR WIFI NAME"                                                 // WiFi Name
-#define PASSWORD "YOUR WIFI PASSWORD"                                     // WiFi Password
 #define LINE_TOKEN "YOUR LINE TOKEN" // TOKEN
 #define LINE_API "https://notify-api.line.me/api/notify"         // LINE API
+
+const String DEVICE_TOKEN = "YOUR DEVICE TOKEN FROM THINGSBOARD";
+
+const String thingsboardServer = "IP SERVER THINGSBOARD";
+
+WiFiManager wifiManager;
 
 int getAccAmp();
 int getAngleAmp();
 float *getGpsInfo();
+void sendTelemetry(String urlServer, String token, float latiude, float longitude);
+void appendFloatToString(String &str, float value);
 void lineNotify(float lanitude, float longitde);
 void serialFlush();
 void mpu_read();
@@ -52,13 +60,8 @@ void setup()
   Wire.write(0);    // set to zero (wakes up the MPU-6050)
   Wire.endTransmission(true);
 
-  // Connecting to WiFi
-  WiFi.begin(SSID, PASSWORD);
-  while (WiFi.status() != WL_CONNECTED)
-  {
-    delay(500);
-    Serial.print(".");
-  }
+  wifiManager.autoConnect("AutoConnectAP_FallDetection", "lalafell");
+
   Serial.println("");
   Serial.println("WiFi connected");
   Serial.println("IP address: ");
@@ -70,6 +73,7 @@ void loop()
 {
   if (state == filter)
   {
+
     amp = getAccAmp();
     // Serial.println(amp);,
 
@@ -78,8 +82,25 @@ void loop()
       Serial.println("TRIGGER 1 ACTIVATED");
       state = TRIGGER1;
     }
+
+    if (!WiFi.isConnected())
+    {
+      state = reconnectWifi;
+    }
+
     delay(100);
   }
+
+  else if (state == reconnectWifi)
+  {
+    wifiManager.autoConnect("AutoConnectAP_FallDetection", "lalafell");
+
+    if (WiFi.isConnected())
+    {
+      state = filter;
+    }
+  }
+
   else if (state == TRIGGER1)
   {
     amp = getAccAmp();
@@ -96,6 +117,7 @@ void loop()
       Serial.println("TRIGGER 1 DECACTIVATED");
       state = filter;
     }
+
     delay(100);
   }
   else if (state == TRIGGER2)
@@ -142,9 +164,18 @@ void loop()
   }
   else if (state == FALL_ACTIVATION)
   { // in event of a fall detection
+
+    if (!WiFi.isConnected())
+    {
+      state = reconnectWifi;
+    }
+
     Serial.println("FALL DETECTED");
     float *coordinate = getGpsInfo();
-    lineNotify(coordinate[0], coordinate[1]);
+
+    sendTelemetry(thingsboardServer, DEVICE_TOKEN, coordinate[0], coordinate[1]);
+    // lineNotify(coordinate[0], coordinate[1]);
+
     state = filter;
   }
 }
@@ -200,23 +231,18 @@ void lineNotify(float lanitude, float longitde)
   https.addHeader("Authorization", "Bearer " + String(LINE_TOKEN));
   https.addHeader("Content-Type", "application/x-www-form-urlencoded");
 
-  if (latitude == 0.0 && longitde == 0.0) 
+  if (lanitude == 0.0 && longitde == 0.0)
   {
     String httpMsg = "message=Fall Detection!\nError: Can't detect location.";
     int httpsResponseCode = https.POST(httpMsg);
     Serial.println("Line Notify Respond Status: " + String(httpsResponseCode));
   }
-  else 
+  else
   {
     String mapLink = "http://maps.google.com/maps?q=";
-    char buffer[10];
-    dtostrf(latitude, 9, 6, buffer);
-    mapLink += buffer;
-    memset(buffer, 0, sizeof(buffer));
+    appendFloatToString(mapLink, lanitude);
     mapLink += ",";
-    dtostrf(longitude, 9, 6, buffer);
-    mapLink += buffer;
-    memset(buffer, 0, sizeof(buffer));
+    appendFloatToString(mapLink, longitde);
 
     String httpMsg = "message=Fall Detection!\nGoogle Map Link: " + mapLink;
     Serial.println(httpMsg);
@@ -224,6 +250,34 @@ void lineNotify(float lanitude, float longitde)
     int httpsResponseCode = https.POST(httpMsg);
     Serial.println("Line Notify Respond Status: " + String(httpsResponseCode));
   }
+}
+
+void sendTelemetry(String urlServer, String token, float latiude, float longitude)
+{
+  WiFiClient wificlient;
+  HTTPClient http;
+  String postUrl = urlServer + "/api/v1/" + token + "/telemetry";
+  Serial.println(postUrl);
+  http.begin(wificlient, postUrl);
+  http.addHeader("Content-Type", "application/json");
+
+  String httpMessage = "{latitude:";
+  appendFloatToString(httpMessage, latiude);
+  httpMessage += ",longitude:";
+  appendFloatToString(httpMessage, longitude);
+  httpMessage += "}";
+
+  Serial.println(httpMessage);
+
+  int httpStatusCode = http.POST(httpMessage);
+  Serial.println(httpStatusCode);
+}
+
+void appendFloatToString(String &str, float value)
+{
+  char buffer[10];
+  dtostrf(value, 9, 6, buffer);
+  str += buffer;
 }
 
 float *getGpsInfo()
@@ -267,23 +321,13 @@ float *getGpsInfo()
 
             coordinate[0] = latitude;
             coordinate[1] = longitude;
-            Serial.print("Latitude= ");
-            Serial.println(coordinate[0], 6);
-            Serial.print("Longtitude= ");
-            Serial.println(coordinate[1], 6);
-            return coordinate;
           }
           else
           {
-            Serial.println("Error: No Signal from Satalite");
+            // Serial.println("Error: No Signal from Satalite");
           }
           serialFlush();
         }
-        Serial.print("Latitude= ");
-        Serial.println(coordinate[0], 6);
-        Serial.print("Longtitude= ");
-        Serial.println(coordinate[1], 6);
-        return coordinate;
       }
       else if (c == '\n')
       {
@@ -295,8 +339,9 @@ float *getGpsInfo()
       }
       delay(1);
     }
+    serialFlush();
   }
-  Serial.println("No Serial from GPS NEO6m (maybe wire RX, TX connect wrong?)");
+  // Serial.println("No Serial from GPS NEO6m (maybe wire RX, TX connect wrong?)");
   Serial.print("Latitude= ");
   Serial.println(coordinate[0], 6);
   Serial.print("Longtitude= ");

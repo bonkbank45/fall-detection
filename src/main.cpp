@@ -35,15 +35,21 @@ const int reconnectWifi = 5;
 #define LINE_TOKEN "YOUR LINE TOKEN" // TOKEN
 #define LINE_API "https://notify-api.line.me/api/notify"         // LINE API
 
-const String DEVICE_TOKEN = "YOUR DEVICE TOKEN FROM THINGSBOARD";
+#define LED_WIFI D5
+#define LED_GPS D7
 
-const String thingsboardServer = "IP SERVER THINGSBOARD";
+bool ledState = LOW;
+
+const String DEVICE_TOKEN = "YOUR TOKEN DEIVCE";
+
+const String thingsboardServer = "YOUR THINGSBOARD SERVER";
 
 WiFiManager wifiManager;
 
 int getAccAmp();
 int getAngleAmp();
 float *getGpsInfo();
+void getGpsInfoLedStatus();
 void sendTelemetry(String urlServer, String token, float latiude, float longitude);
 void appendFloatToString(String &str, float value);
 void lineNotify(float lanitude, float longitde);
@@ -60,7 +66,17 @@ void setup()
   Wire.write(0);    // set to zero (wakes up the MPU-6050)
   Wire.endTransmission(true);
 
+  pinMode(LED_WIFI, OUTPUT);
+  pinMode(LED_GPS, OUTPUT);
+  digitalWrite(LED_WIFI, LOW);
+  digitalWrite(LED_GPS, LOW);
+
   wifiManager.autoConnect("AutoConnectAP_FallDetection", "lalafell");
+
+  if (WiFi.isConnected())
+  {
+    digitalWrite(LED_WIFI, HIGH);
+  }
 
   Serial.println("");
   Serial.println("WiFi connected");
@@ -76,6 +92,21 @@ void loop()
 
     amp = getAccAmp();
     // Serial.println(amp);,
+
+    float *coordinate = getGpsInfo();
+    // LED_GPS Status
+    if (coordinate[0] == 0.0 && coordinate[1] == 0.0)
+    {
+      if (ledState == LOW)
+        ledState = HIGH;
+      else
+        ledState = LOW;
+      digitalWrite(LED_GPS, ledState);
+    }
+    else
+    {
+      digitalWrite(LED_GPS, HIGH);
+    }
 
     if (amp <= 2 && trigger2 == false)
     { // if AM breaks lower threshold (0.4g)
@@ -93,6 +124,8 @@ void loop()
 
   else if (state == reconnectWifi)
   {
+    digitalWrite(LED_WIFI, LOW);
+
     wifiManager.autoConnect("AutoConnectAP_FallDetection", "lalafell");
 
     if (WiFi.isConnected())
@@ -296,7 +329,7 @@ float *getGpsInfo()
       char c = SerialGPS.read();
       if (c == '\r')
       {
-        Serial.println(line);
+        // Serial.println(line);
         if (line.indexOf("$GPRMC" >= 0))
         {
           String dataCut[13];
@@ -342,10 +375,10 @@ float *getGpsInfo()
     serialFlush();
   }
   // Serial.println("No Serial from GPS NEO6m (maybe wire RX, TX connect wrong?)");
-  Serial.print("Latitude= ");
-  Serial.println(coordinate[0], 6);
-  Serial.print("Longtitude= ");
-  Serial.println(coordinate[1], 6);
+  // Serial.print("Latitude= ");
+  // Serial.println(coordinate[0], 6);
+  // Serial.print("Longtitude= ");
+  // Serial.println(coordinate[1], 6);
   return coordinate;
 }
 

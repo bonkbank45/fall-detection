@@ -32,17 +32,22 @@ const int TRIGGER3 = 3;
 const int FALL_ACTIVATION = 4;
 const int reconnectWifi = 5;
 
-#define LINE_TOKEN "YOUR LINE TOKEN" // TOKEN
+#define LINE_TOKEN "zJwGdTjFPRT15zEAdqetS60s1yjSBRfmuSoL6QANJhq" // TOKEN
 #define LINE_API "https://notify-api.line.me/api/notify"         // LINE API
 
 #define LED_WIFI D5
 #define LED_GPS D7
+#define LED_POWER D8
 
 bool ledState = LOW;
+bool startCountGpsBuffer = false;
+unsigned int countGpsBuffer = 0;
 
-const String DEVICE_TOKEN = "YOUR TOKEN DEIVCE";
+const String DEVICE_TOKEN = "YOUR DEVICE TOKEN";
 
-const String thingsboardServer = "YOUR THINGSBOARD SERVER";
+char thingsboardServer[] = "YOUR THINGSBOARD SERVER DEFAULT";
+
+char thingsboardServerPort[] = "YOUR THINGSBOARD PORT DEFAULT";
 
 WiFiManager wifiManager;
 
@@ -50,7 +55,7 @@ int getAccAmp();
 int getAngleAmp();
 float *getGpsInfo();
 void getGpsInfoLedStatus();
-void sendTelemetry(String urlServer, String token, float latiude, float longitude);
+void sendTelemetry(char *urlServer, char *port, String token, float latiude, float longitude);
 void appendFloatToString(String &str, float value);
 void lineNotify(float lanitude, float longitde);
 void serialFlush();
@@ -68,10 +73,21 @@ void setup()
 
   pinMode(LED_WIFI, OUTPUT);
   pinMode(LED_GPS, OUTPUT);
+  pinMode(LED_POWER, OUTPUT);
   digitalWrite(LED_WIFI, LOW);
   digitalWrite(LED_GPS, LOW);
+  digitalWrite(LED_POWER, HIGH);
 
-  wifiManager.autoConnect("AutoConnectAP_FallDetection", "lalafell");
+  WiFiManagerParameter customThingsboardServer("server", "ThingBoard Server Ip Address", thingsboardServer, 40);
+  WiFiManagerParameter customThingsboardPort("port", "ThingBoard Server Port", thingsboardServerPort, 6);
+
+  wifiManager.addParameter(&customThingsboardServer);
+  wifiManager.addParameter(&customThingsboardPort);
+
+  wifiManager.autoConnect("AutoConnectAP_FallDetection", "lalafell"); // Lalafell Masterrace
+
+  strcpy(thingsboardServer, customThingsboardServer.getValue());
+  strcpy(thingsboardServerPort, customThingsboardPort.getValue());
 
   if (WiFi.isConnected())
   {
@@ -97,15 +113,27 @@ void loop()
     // LED_GPS Status
     if (coordinate[0] == 0.0 && coordinate[1] == 0.0)
     {
-      if (ledState == LOW)
-        ledState = HIGH;
-      else
-        ledState = LOW;
-      digitalWrite(LED_GPS, ledState);
+      if (startCountGpsBuffer) // 100.00 -> 0.000 -> 0.000 -> 0.000 -> 100.0
+      {
+        countGpsBuffer++;
+        if (countGpsBuffer == 3) {
+          countGpsBuffer = 0;
+          startCountGpsBuffer = false;
+        }
+      }
+      else // Blink LED
+      {
+        if (ledState == LOW)
+          ledState = HIGH;
+        else
+          ledState = LOW;
+        digitalWrite(LED_GPS, ledState);
+      }
     }
     else
     {
       digitalWrite(LED_GPS, HIGH);
+      startCountGpsBuffer = true;
     }
 
     if (amp <= 2 && trigger2 == false)
@@ -151,6 +179,11 @@ void loop()
       state = filter;
     }
 
+    if (!WiFi.isConnected())
+    {
+      state = reconnectWifi;
+    }
+
     delay(100);
   }
   else if (state == TRIGGER2)
@@ -171,6 +204,12 @@ void loop()
       Serial.println("TRIGGER 2 DECACTIVATED");
       state = filter;
     }
+
+    if (!WiFi.isConnected())
+    {
+      state = reconnectWifi;
+    }
+
     delay(100);
   }
   else if (state == TRIGGER3)
@@ -193,6 +232,12 @@ void loop()
         state = filter;
       }
     }
+
+    if (!WiFi.isConnected())
+    {
+      state = reconnectWifi;
+    }
+
     delay(100);
   }
   else if (state == FALL_ACTIVATION)
@@ -206,8 +251,13 @@ void loop()
     Serial.println("FALL DETECTED");
     float *coordinate = getGpsInfo();
 
-    sendTelemetry(thingsboardServer, DEVICE_TOKEN, coordinate[0], coordinate[1]);
-    // lineNotify(coordinate[0], coordinate[1]);
+    sendTelemetry(thingsboardServer, thingsboardServerPort, DEVICE_TOKEN, coordinate[0], coordinate[1]);
+    lineNotify(coordinate[0], coordinate[1]);
+
+    if (!WiFi.isConnected())
+    {
+      state = reconnectWifi;
+    }
 
     state = filter;
   }
@@ -285,11 +335,16 @@ void lineNotify(float lanitude, float longitde)
   }
 }
 
-void sendTelemetry(String urlServer, String token, float latiude, float longitude)
+void sendTelemetry(char *urlServer, char *port, String token, float latiude, float longitude)
 {
   WiFiClient wificlient;
   HTTPClient http;
-  String postUrl = urlServer + "/api/v1/" + token + "/telemetry";
+  char httpProtocol[8] = "http://";
+  strcat(httpProtocol, urlServer);
+  strcat(httpProtocol, ":");
+  strcat(httpProtocol, port);
+  String postUrl = httpProtocol;
+  postUrl += "/api/v1/" + token + "/telemetry";
   Serial.println(postUrl);
   http.begin(wificlient, postUrl);
   http.addHeader("Content-Type", "application/json");
@@ -375,10 +430,10 @@ float *getGpsInfo()
     serialFlush();
   }
   // Serial.println("No Serial from GPS NEO6m (maybe wire RX, TX connect wrong?)");
-  // Serial.print("Latitude= ");
-  // Serial.println(coordinate[0], 6);
-  // Serial.print("Longtitude= ");
-  // Serial.println(coordinate[1], 6);
+  Serial.print("Latitude= ");
+  Serial.println(coordinate[0], 6);
+  Serial.print("Longtitude= ");
+  Serial.println(coordinate[1], 6);
   return coordinate;
 }
 

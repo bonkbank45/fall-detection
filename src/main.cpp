@@ -32,7 +32,7 @@ const int TRIGGER3 = 3;
 const int FALL_ACTIVATION = 4;
 const int reconnectWifi = 5;
 
-#define LINE_TOKEN "zJwGdTjFPRT15zEAdqetS60s1yjSBRfmuSoL6QANJhq" // TOKEN
+#define LINE_TOKEN "your_line_token" // TOKEN
 #define LINE_API "https://notify-api.line.me/api/notify"         // LINE API
 
 #define LED_WIFI D5
